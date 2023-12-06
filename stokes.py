@@ -1,53 +1,58 @@
 import firedrake as fd
 from firedrake import ufl
 import numpy as np
-import IPython
 
-nx1 = 10
-nx2 = 10
-nx = nx1 + nx2
-ny1 = 5
-ny2 = 10
-height = np.pi/ny2
+
+# problem parameters
 degree = 3
+nx1 = 10
+nx2 = 5  # amount of cells for bump width
+nx3 = 10
+nx = nx1 + nx2 + nx3
+ny1 = 20
+ny2 = 15  # amount of cells above bump
+ny3 = 20  # easiest if the same as ny1
 
-"""
-b = 0.1
-h = 0.5
-mesh = fd.PeriodicSquareMesh(nx, nx, direction="x", L=1, quadrilateral=True)
-Vc = mesh.coordinates.function_space()
-x, y = fd.SpatialCoordinate(mesh)
-g = fd.Function(Vc).interpolate(fd.as_vector([x, y + fd.conditional(fd.ge(x, 0.5 - b/2), 1, 0)*fd.conditional(fd.le(x, 0.5 + b/2), 1, 0)*(-h*y + h)]))
-mesh.coordinates.assign(g)"""
 
-#mesh = fd.Mesh('periodic_bump.msh')
-base = fd.CircleManifoldMesh(nx, degree=degree)
+# mesh
+#mesh_type = "periodic"
+mesh_type = "circular"
+if mesh_type == "periodic":
+    length = 1
+    base = fd.PeriodicIntervalMesh(nx, length)
+    layer_height = length/nx  # ensures square cells
+elif mesh_type == "circular":
+    radius = 1
+    base = fd.CircleManifoldMesh(nx, radius=radius, degree=3)
+    layer_height = 2*np.pi*radius/nx
 layers = np.zeros((nx, 2))
-layers[:, 1] = ny2
-layers[:nx1, 0] = ny1
-layers[:nx1, 1] = ny2 - ny1
-mesh = fd.ExtrudedMesh(base, layers, height)
+layers[nx1:nx1+nx2, 0] = ny1 - ny2
+layers[:nx1, 1] = ny1
+layers[nx1:nx1+nx2, 1] = ny2
+layers[nx1+nx2:, 1] = ny3
+
+mesh = fd.ExtrudedMesh(base, layers, layer_height)
 x = fd.SpatialCoordinate(mesh)
+gdim = mesh.geometric_dimension()  # dim of space the mesh lives in
+tdim = mesh.topological_dimension()  # dim of the manifold
 
-gdim = mesh.geometric_dimension()
-tdim = mesh.topological_dimension()
 
+# finite element space
 e_v = fd.FiniteElement("Q", cell=mesh.ufl_cell(), degree=degree, variant="fdm")
 e_p = fd.FiniteElement("DQ", cell=mesh.ufl_cell(), degree=degree-2, variant="fdm")
-
 V = fd.VectorFunctionSpace(mesh, e_v, dim=tdim)
 W = fd.FunctionSpace(mesh, e_p)
 Z = V*W
 
+
+# defining linear variational problem
 u, p = fd.TrialFunctions(Z)
 v, q = fd.TestFunctions(Z)
-f = fd.Constant((0, 0))
-
 
 if gdim == tdim:
     grad = fd.grad
     div = fd.div
-elif tdim == 2 and gdim == 3:
+elif tdim == 2 and gdim == 3:  # if a 2D mesh is embedded in 3D space
     J = fd.as_matrix([[-x[1], 0], [x[0], 0], [0, 1]])
     grad = lambda u: fd.dot(fd.grad(u), J)
     div = lambda u: fd.tr(grad(u))
@@ -57,13 +62,14 @@ ev = fd.sym(grad(v))
 du = div(u)
 dv = div(v)
 
+f = fd.Constant((0, 0))
+
 a = (2*fd.inner(eu, ev) - fd.inner(p, dv) 
        - fd.inner(du, q))*fd.dx
 l = fd.inner(f, v)*fd.dx
 
-gamma = fd.Constant(2)*abs(fd.JacobianDeterminant(mesh))/ufl.CellVolume(mesh)
-aP = a + fd.inner(p/gamma, q)*fd.dx + fd.inner(du*gamma, dv)*fd.dx
 
+# bcs
 if mesh.extruded:
     top = "top"
     bottom = "bottom"
@@ -74,17 +80,23 @@ else:
 bcs = [fd.DirichletBC(Z.sub(0), fd.Constant((1, 0)), top),
        fd.DirichletBC(Z.sub(0), fd.Constant((0, 0)), bottom)]
 
+
+# pressure nullspace
 nullspace = fd.MixedVectorSpaceBasis(
     Z, [Z.sub(0), fd.VectorSpaceBasis(constant=True)])
+#nullspace = None
 
-nullspace = None
+
+# solving
+gamma = fd.Constant(2)*abs(fd.JacobianDeterminant(mesh))/ufl.CellVolume(mesh)  # to account for non-orthogonal quads
+aP = a + fd.inner(p/gamma, q)*fd.dx + fd.inner(du*gamma, dv)*fd.dx  # augmented Lagrangian?
+
 coarse = {
     "mat_type": "aij",
     "ksp_type": "preonly",
     "pc_type": "cholesky",
 }
 
-# FDM without static condensation
 fdmstar = {
     "ksp_type": "preonly",
     "pc_type": "python",
@@ -127,26 +139,14 @@ parameters = {
     }
 }
 
-"""parameters = {
-    "ksp_type": "gmres",
-    "ksp_monitor": None,
-    "mat_type": "aij",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}"""
-
 sol = fd.Function(Z)
-
 LVP = fd.LinearVariationalProblem(a, l, sol, bcs=bcs, aP=aP)
 LVS = fd.LinearVariationalSolver(LVP, solver_parameters=parameters, nullspace=nullspace)
-
 LVS.solve()
 
 
+# plotting
 velocity, pressure = sol.subfunctions
 velocity.rename("Velocity")
 pressure.rename("Pressure")
-
 fd.File("plots/stokes.pvd").write(velocity, pressure)
-
-#IPython.embed()
