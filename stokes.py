@@ -6,11 +6,11 @@ import numpy as np
 # problem parameters
 degree = 3
 nx1 = 10
-nx2 = 5  # amount of cells for bump width
+nx2 = 10  # amount of cells for bump width
 nx3 = 10
 nx = nx1 + nx2 + nx3
 ny1 = 20
-ny2 = 15  # amount of cells above bump
+ny2 = 5  # amount of cells above bump
 ny3 = 20  # easiest if the same as ny1
 
 
@@ -84,7 +84,6 @@ bcs = [fd.DirichletBC(Z.sub(0), fd.Constant((1, 0)), top),
 # pressure nullspace
 nullspace = fd.MixedVectorSpaceBasis(
     Z, [Z.sub(0), fd.VectorSpaceBasis(constant=True)])
-#nullspace = None
 
 
 # solving
@@ -143,7 +142,6 @@ sol = fd.Function(Z)
 LVP = fd.LinearVariationalProblem(a, l, sol, bcs=bcs, aP=aP)
 LVS = fd.LinearVariationalSolver(LVP, solver_parameters=parameters, nullspace=nullspace)
 LVS.solve()
-
 
 # plotting
 velocity, pressure = sol.subfunctions
